@@ -1,0 +1,12 @@
+service:
+  db:
+    image: postgres:18-alpine3.23
+    env_file:
+      - .env
+    volumes:
+      - ./volumes/postgresql:/var/lib/postgresql
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
