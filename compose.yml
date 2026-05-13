@@ -1,12 +1,32 @@
-service:
+services:
+  backend:
+    build: .
+    image: backend:latest
+    env_file: .env
+    depends_on:
+      - db
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./app:/fast_app/app
+      - ./migrations:/fast_app/migrations
+
+  migrations:
+    image: backend:latest
+    env_file: .env
+    command: alembic upgrade head
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./app:/fast_app/app
+      - ./migrations:/fast_app/migrations
+
   db:
     image: postgres:18-alpine3.23
-    env_file:
-      - .env
-    volumes:
-      - ./volumes/postgresql:/var/lib/postgresql
+    env_file: .env
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 5
