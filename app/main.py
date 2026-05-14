@@ -93,7 +93,6 @@ async def predict(features: HealthFeatures, session: SessionDep):
     predicted_class = int(model.predict(prepared_features)[0])
     predicted_proba = float(model.predict_proba(prepared_features)[0, 1])
 
-
     session.add(
         PredictionModel(
             **features.model_dump(),
@@ -103,4 +102,4 @@ async def predict(features: HealthFeatures, session: SessionDep):
     )
     await session.commit()
 
-    return {"predicted_class": predicted_class}
+    return {"class": predicted_class, "proba": predicted_proba}
