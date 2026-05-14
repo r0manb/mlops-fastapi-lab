@@ -1,9 +1,11 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
-import pickle
-import pandas as pd
+import joblib
 import logging
-from sklearn.preprocessing import OrdinalEncoder
+from typing import Literal, TypeAlias
+
+from fastapi import FastAPI
+from pydantic import BaseModel, field_validator
+import pandas as pd
+import numpy as np
 
 from app.database import PredictionModel
 from app.deps import SessionDep
@@ -12,99 +14,93 @@ from app.lifespan import lifespan
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Загрузка модели (замените путь на свой)
+BinLiteral: TypeAlias = Literal["yes", "no"]
+
+
+_EXERCISE_MAP = {"none": 0, "low": 1, "medium": 2, "high": 3}
+_SUGAR_INTAKE_MAP = {k: v - 1 for k, v in _EXERCISE_MAP.items() if k != "none"}
+_BIN_COLS = ["smoking", "alcohol", "married"]
+
+
 try:
-    with open("models/cars.joblib", "rb") as f:
-        model = pickle.load(f)
+    with open("models/model.pkl", "rb") as f:
+        model = joblib.load(f)
     logger.info("Model loaded successfully")
 
 except Exception as e:
     logger.error(f"Error loading model: {e}")
-    # raise
 
-with open("models/power.joblib", "rb") as file:
-    predict2price = pickle.load(file)
+with open("models/scaler.joblib", "rb") as file:
+    scaler = joblib.load(file)
 
-
-app = FastAPI(title="Car Price", lifespan=lifespan)
-
-
-def clear_data(df):
-    cat_columns = ["Make", "Model", "Style", "Fuel_type", "Transmission"]
-    num_columns = ["Year", "Distance", "Engine_capacity(cm3)", "Price(euro)"]
-    ordinal = OrdinalEncoder()
-    ordinal.fit(df[cat_columns])
-    Ordinal_encoded = ordinal.transform(df[cat_columns])
-    df_ordinal = pd.DataFrame(Ordinal_encoded, columns=cat_columns)
-    df[cat_columns] = df_ordinal[cat_columns]
-    return df
+with open("models/encoder.joblib", "rb") as file:
+    encoder = joblib.load(file)
+known_professions = encoder.categories_[0].tolist()
 
 
-def featurize(dframe):
-    """
-    Генерация новых признаков
-    """
-    dframe["Distance_by_year"] = dframe["Distance"] / (2022 - dframe["Year"])
-    dframe["age"] = 2024 - dframe["Year"]
-    mean_engine_cap = dframe.groupby("Style")["Engine_capacity"].mean()
-    dframe["eng_cap_diff"] = dframe.apply(
-        lambda row: abs(row["Engine_capacity"] - mean_engine_cap[row["Style"]]), axis=1
+def prepare_features(df: pd.DataFrame) -> np.ndarray:
+    df.drop("height", axis=1, inplace=True)
+
+    df["exercise"] = df["exercise"].map(_EXERCISE_MAP).astype("int8")
+    df["sugar_intake"] = df["sugar_intake"].map(_SUGAR_INTAKE_MAP).astype("int8")
+
+    df[_BIN_COLS] = df[_BIN_COLS].replace({"yes": 1, "no": 0}).astype("int8")
+
+    encoded_professions = encoder.transform(df[["profession"]])
+    encoded_df = pd.DataFrame(
+        encoded_professions,
+        columns=encoder.get_feature_names_out(["profession"]),
+        dtype="int8",
     )
+    df = pd.concat([df, encoded_df], axis=1)
+    df.drop("profession", axis=1, inplace=True)
+    print(df.columns)
 
-    max_engine_cap = dframe.groupby("Style")["Engine_capacity"].max()
-    dframe["eng_cap_diff_max"] = dframe.apply(
-        lambda row: abs(row["Engine_capacity"] - max_engine_cap[row["Style"]]), axis=1
-    )
-    return dframe
-
-
-# Модель входных данных
-class CarFeatures(BaseModel):
-    make: str
-    model: str
-    year: int
-    style: str
-    distance: float
-    engine_capacity: float
-    fuel_type: str
-    transmission: str
-    # distanse_by_year: str
-    # age: str
-    # eng_cap_diff: str
-    # eng_cap_diff_max: str
+    return scaler.transform(df.values)
 
 
-@app.post("/predict", summary="Predict car price")
-async def predict(car: CarFeatures, session: SessionDep):
-    """
-    Предсказывает стоимость автомобиля
-    """
-    try:
-        columns_names = [
-            "Make",
-            "Model",
-            "Year",
-            "Style",
-            "Distance",
-            "Engine_capacity",
-            "Fuel_type",
-            "Transmission",
-        ]
-        input_data = pd.DataFrame([car.dict()])
-        input_data.columns = columns_names
-        featurize_df = featurize(clear_data(input_data))
-        print(featurize_df)
-        predict = model.predict(featurize_df)[0]
-        price = predict2price.inverse_transform(predict.reshape(-1, 1))
-        price = round(float(price), 2)
+app = FastAPI(title="Health Risk", lifespan=lifespan)
 
-        session.add(
-            PredictionModel(**car.model_dump(), predict=predict, inversed_predict=price)
+
+class HealthFeatures(BaseModel):
+    age: int
+    weight: int
+    height: int
+    exercise: Literal["none", "low", "medium", "high"]
+    sleep: float
+    sugar_intake: Literal["low", "medium", "high"]
+    smoking: BinLiteral
+    alcohol: BinLiteral
+    married: BinLiteral
+    profession: str
+    bmi: float
+
+    @field_validator("profession")
+    @classmethod
+    def validate_profession(cls, v: str) -> str:
+        if v not in known_professions:
+            raise ValueError(
+                f"Unknown profession '{v}'. " f"Valid values: {known_professions}"
+            )
+        return v
+
+
+@app.post("/predict")
+async def predict(features: HealthFeatures, session: SessionDep):
+    input_data = pd.DataFrame([features.model_dump()])
+    prepared_features = prepare_features(input_data)
+
+    predicted_class = int(model.predict(prepared_features)[0])
+    predicted_proba = float(model.predict_proba(prepared_features)[0, 1])
+
+
+    session.add(
+        PredictionModel(
+            **features.model_dump(),
+            predict=predicted_class,
+            predict_proba=predicted_proba,
         )
-        await session.commit()
+    )
+    await session.commit()
 
-        return {"predicted_price": price}
-
-    except Exception as e:
-        logger.error(f"Prediction error: {e}")
-        return {"error": str(e)}
+    return {"predicted_class": predicted_class}

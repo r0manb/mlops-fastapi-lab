@@ -13,16 +13,19 @@ class PredictionModel(Base):
     __tablename__ = "predictions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    make: Mapped[str]
-    model: Mapped[str]
-    year: Mapped[int]
-    style: Mapped[str]
-    distance: Mapped[float]
-    engine_capacity: Mapped[float]
-    fuel_type: Mapped[str]
-    transmission: Mapped[str]
-    predict: Mapped[float] = mapped_column(nullable=False)
-    inversed_predict: Mapped[float] = mapped_column(nullable=False)
+    age: Mapped[int]
+    weight: Mapped[int]
+    height: Mapped[int]
+    exercise: Mapped[str]
+    sleep: Mapped[float]
+    sugar_intake: Mapped[str]
+    smoking: Mapped[str]
+    alcohol: Mapped[str]
+    married: Mapped[str]
+    profession: Mapped[str]
+    bmi: Mapped[float]
+    predict: Mapped[int]
+    predict_proba: Mapped[float]
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
